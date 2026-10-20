@@ -5,9 +5,8 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const supabaseKey =
-  process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
   throw new Error(
@@ -15,26 +14,40 @@ if (!supabaseUrl || !supabaseKey) {
   );
 }
 
-// Avoid accessing browser storage during server-side rendering.
 const serverStorage = {
-  getItem: async (_key: string) => null,
-  setItem: async (_key: string, _value: string) => {},
-  removeItem: async (_key: string) => {},
+  getItem: async (_key: string): Promise<string | null> => null,
+  setItem: async (_key: string, _value: string): Promise<void> => {},
+  removeItem: async (_key: string): Promise<void> => {},
 };
 
 const webStorage = {
-  getItem: async (key: string) =>
-    typeof window !== 'undefined' ? window.localStorage.getItem(key) : null,
+  getItem: async (key: string): Promise<string | null> => {
+    if (typeof window === 'undefined') return null;
 
-  setItem: async (key: string, value: string) => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(key, value);
+    try {
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
     }
   },
 
-  removeItem: async (key: string) => {
-    if (typeof window !== 'undefined') {
+  setItem: async (key: string, value: string): Promise<void> => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {
+      // Browser storage may be unavailable in restricted contexts.
+    }
+  },
+
+  removeItem: async (key: string): Promise<void> => {
+    if (typeof window === 'undefined') return;
+
+    try {
       window.localStorage.removeItem(key);
+    } catch {
+      // Browser storage may be unavailable in restricted contexts.
     }
   },
 };

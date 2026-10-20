@@ -34,7 +34,8 @@
           "imageWidth": 76
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "react-native-blob-util"
     ],
     "experiments": {
       "typedRoutes": true,
