@@ -1,7 +1,11 @@
+
 import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
+
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../lib/supabase';
+
 import {
   ActivityIndicator,
   Pressable,
@@ -11,20 +15,22 @@ import {
   View,
 } from 'react-native';
 
-const PDF_URL =
-  'https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf';
-
-const BOOK_ID = 'demo-pdf-1';
+const BUCKET_NAME = 'books';
+const PDF_PATH = 'yash_test.pdf';
+const BOOK_ID = 'yash-test-pdf';
 const STORAGE_KEY = `reading-progress-${BOOK_ID}`;
+const SIGNED_URL_EXPIRY_SECONDS = 3600;
 
 type PdfModule = typeof import('react-pdf');
 
 export default function ReaderScreen() {
   const [progressLoaded, setProgressLoaded] = useState(false);
   const [PdfViewer, setPdfViewer] = useState<PdfModule | null>(null);
+  const [pdfUrl, setPdfUrl] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [error, setError] = useState('');
+  const [loadingPdf, setLoadingPdf] = useState(true);
 
   // Load the PDF viewer in the browser.
   useEffect(() => {
@@ -40,13 +46,13 @@ export default function ReaderScreen() {
         setPdfViewer(module);
       })
       .catch((err: unknown) => {
-        if (active) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : 'Failed to load the PDF viewer.'
-          );
-        }
+        if (!active) return;
+
+        setError(
+          err instanceof Error
+            ? `Failed to load PDF viewer: ${err.message}`
+            : 'Failed to load the PDF viewer.'
+        );
       });
 
     return () => {
@@ -54,7 +60,58 @@ export default function ReaderScreen() {
     };
   }, []);
 
-  // Restore the last-read page.
+  // Get a temporary URL for the PDF in private Supabase Storage.
+  useEffect(() => {
+    let active = true;
+
+    async function loadPdfUrl() {
+      setLoadingPdf(true);
+      setError('');
+
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        console.log('Supabase session exists:', !!sessionData.session);
+        console.log('Supabase user ID:', sessionData.session?.user.id ?? 'No session');
+        const { data, error: storageError } = await supabase.storage
+          .from(BUCKET_NAME)
+          .createSignedUrl(PDF_PATH, SIGNED_URL_EXPIRY_SECONDS);
+
+        if (storageError) {
+          throw storageError;
+        }
+
+        if (!data?.signedUrl) {
+          throw new Error('Supabase did not return a signed URL.');
+        }
+
+        if (active) {
+          setPdfUrl(data.signedUrl);
+        }
+      } catch (err: unknown) {
+        console.error('Supabase PDF error:', err);
+
+        if (!active) return;
+
+        setError(
+          err instanceof Error
+            ? `Could not load PDF: ${err.message}`
+            : 'Could not load the PDF from Supabase.'
+        );
+      } finally {
+        if (active) {
+          setLoadingPdf(false);
+        }
+      }
+    }
+
+    loadPdfUrl();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Restore the last-read page from this device.
   useEffect(() => {
     let active = true;
 
@@ -72,7 +129,9 @@ export default function ReaderScreen() {
         console.error('Could not restore reading progress:', err);
       })
       .finally(() => {
-        if (active) setProgressLoaded(true);
+        if (active) {
+          setProgressLoaded(true);
+        }
       });
 
     return () => {
@@ -80,7 +139,7 @@ export default function ReaderScreen() {
     };
   }, []);
 
-  // Save progress after restoration and PDF loading.
+  // Save the current page locally.
   useEffect(() => {
     if (!progressLoaded || !totalPages) return;
 
@@ -94,14 +153,15 @@ export default function ReaderScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.heading}>PDF Reader</Text>
+      <Text style={styles.subtitle}>{PDF_PATH}</Text>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      {!PdfViewer && !error ? (
+      {(loadingPdf || (!PdfViewer && !error)) && !error ? (
         <ActivityIndicator size="large" />
       ) : null}
 
-      {PdfViewer && !error ? (
+      {PdfViewer && pdfUrl && !error && !loadingPdf ? (
         <>
           <View style={styles.toolbar}>
             <Pressable
@@ -121,7 +181,8 @@ export default function ReaderScreen() {
               onPress={() => setPage((current) => current + 1)}
               style={[
                 styles.button,
-                (!totalPages || page >= totalPages) && styles.disabledButton,
+                (!totalPages || page >= totalPages) &&
+                  styles.disabledButton,
               ]}
             >
               <Text>Next</Text>
@@ -129,13 +190,17 @@ export default function ReaderScreen() {
           </View>
 
           <PdfViewer.Document
-            file={PDF_URL}
+            key={pdfUrl}
+            file={pdfUrl}
             loading={<ActivityIndicator size="large" />}
             onLoadSuccess={({ numPages }) => {
               setTotalPages(numPages);
               setPage((current) => Math.min(current, numPages));
             }}
-            onLoadError={(err) => setError(err.message)}
+            onLoadError={(err) => {
+              console.error('PDF rendering error:', err);
+              setError(`PDF reader error: ${err.message}`);
+            }}
           >
             <PdfViewer.Page pageNumber={page} width={650} />
           </PdfViewer.Document>
@@ -155,6 +220,11 @@ const styles = StyleSheet.create({
   heading: {
     fontSize: 26,
     fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#555',
     marginBottom: 20,
   },
   toolbar: {
@@ -175,5 +245,6 @@ const styles = StyleSheet.create({
   error: {
     color: 'red',
     marginVertical: 20,
+    textAlign: 'center',
   },
 });

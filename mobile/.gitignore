@@ -41,3 +41,14 @@ example
 # generated native folders
 /ios
 /android
+
+
+.env
+.env.*
+!.env.example
+
+node_modules/
+.expo/
+dist/
+web-build/
+coverage/
